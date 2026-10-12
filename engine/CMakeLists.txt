@@ -12,7 +12,6 @@ set(PRIVATE_INCLUDE
 
 # set platform dependant source files, headers and macros
 if(WIN32)
-    message(FATAL_ERROR "Windows is not supported at this time.")
     file(GLOB_RECURSE PLATFORM_SRC CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/Linux/*.cpp")
 
