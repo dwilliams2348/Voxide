@@ -4,6 +4,22 @@ project(Voxide LANGUAGES CXX)
 
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
+# Available build configurations
+set(VX_CONFIGS Debug Release RelDeb MinSize)
+
+get_property(IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+
+if(IS_MULTI_CONFIG)
+    # visual studio, xcode, ninja multi-config: configs chosen at build time
+    set(CMAKE_CONFIGURATION_TYPES "${VX_CONFIGS}" CACHE STRING "" FORCE)
+else()
+    # ninja, makefiles: one config per build dir
+    if(NOT CMAKE_BUILD_TYPE)
+        set(CMAKE_BUILD_TYPE Debug CACHE STRING "" FORCE)
+    endif()
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS ${VX_CONFIGS})
+endif()
+
 # sanitizers
 set(SANITIZER "none" CACHE STRING "none | asan | tsan")
 set_property(CACHE SANITIZER PROPERTY STRINGS none asan tsan)
@@ -40,19 +56,6 @@ if(NOT SANITIZER STREQUAL "none")
     add_link_options(${SAN_LINK})
     message(STATUS "Sanitizer: ${SANITIZER}")
 endif()
-
-# Available build configurations
-set(MY_CONFIGS Debug Release RelDeb MinSize)
-
-# Multi-configuration generators: Visual Studio, Ninja Multi-Config
-set(CMAKE_CONFIGURATION_TYPES "${MY_CONFIGS}"
-    CACHE STRING "Available build configurations" FORCE
-)
-
-# Single-configuration generators: Ninja, Unix Makefiles
-set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
-    ${_MY_CONFIGS}
-)
 
 # Reuse CMake's standard configuration flags.
 # These standard variables are initialized by project() above.
