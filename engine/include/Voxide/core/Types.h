@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstddef>
 
 typedef std::uint8_t u8;
 typedef std::uint16_t u16;
