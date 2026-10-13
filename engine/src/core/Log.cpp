@@ -85,7 +85,7 @@ namespace engine::log {
 
             return wanted == mode || SetConsoleMode(handle, wanted) != 0;
         #else
-            i32 fd fileno(stderr);
+            i32 fd = fileno(stderr);
             return fd >= 0 && isatty(fd) != 0;
         #endif
         }
