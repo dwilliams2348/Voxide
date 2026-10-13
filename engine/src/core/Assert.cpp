@@ -1,4 +1,5 @@
-#include "Voxide/core/Assert.h"
+#include <Voxide/core/Assert.h>
+#include <Voxide/core/Log.h>
 
 #include <cstdio>
 #include <cstdlib>

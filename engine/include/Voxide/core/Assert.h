@@ -1,4 +1,6 @@
-#include "Voxide/core/Defines.h"
+#pragma once
+
+#include <Voxide/core/Defines.h>
 
 #include <signal.h>
 

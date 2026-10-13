@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.25...4.4)
 
+# Required for CMAKE_MSVC_RUNTIME_LIBRARY to control /MT vs /MD.
+cmake_policy(SET CMP0091 NEW)
+
+# Default; the sanitizer section may override this for clang-cl ASan.
+set(CMAKE_MSVC_RUNTIME_LIBRARY
+    "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+
 project(Voxide LANGUAGES CXX)
 
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
@@ -24,36 +31,68 @@ endif()
 set(SANITIZER "none" CACHE STRING "none | asan | tsan")
 set_property(CACHE SANITIZER PROPERTY STRINGS none asan tsan)
 
-set(SAN_COMPILE "")
-set(SAN_LINK "")
+set(VX_IS_CLANG_CL OFF)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+   AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    set(VX_IS_CLANG_CL ON)
+endif()
 
 if(NOT SANITIZER STREQUAL "none")
     if(MSVC)
-        # msvc only supports asan
-        if(SANITIZER STREQUAL "asan")
-            set(SAN_COMPILE /fsanitize=address)
-        else()
-            message(FATAL_ERROR "MSVC supports SANITIZER=asan only")
+        if(NOT SANITIZER STREQUAL "asan")
+            message(FATAL_ERROR
+                "MSVC supports SANITIZER=asan only; got '${SANITIZER}'.")
         endif()
+
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
+        add_compile_options(/fsanitize=address)
+
+    elseif(VX_IS_CLANG_CL)
+        if(NOT SANITIZER STREQUAL "asan")
+            message(FATAL_ERROR
+                "clang-cl supports SANITIZER=asan only; got '${SANITIZER}'.")
+        endif()
+
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
+        add_compile_definitions(_ITERATOR_DEBUG_LEVEL=0)
+        add_compile_options(/fsanitize=address)
+
+        set(VX_LLVM_ASAN_DIR
+        "C:/Program Files/LLVM/lib/clang/18/lib/windows")
+
+        set(VX_ASAN_LIBS
+            "${VX_LLVM_ASAN_DIR}/clang_rt.asan-x86_64.lib"
+            "${VX_LLVM_ASAN_DIR}/clang_rt.asan_cxx-x86_64.lib"
+    )
+
+        message(STATUS "Sanitizer: clang-cl AddressSanitizer")
     elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         if(SANITIZER STREQUAL "asan")
-            set(SAN_COMPILE -fsanitize=address,undefined
+            set(VX_SANITIZER_FLAGS
+                -fsanitize=address,undefined
                 -fno-sanitize-recover=undefined
                 -fno-sanitize=vptr
-                -fno-omit-frame-pointer)
-            set(SAN_LINK -fsanitize=address,undefined)
+                -fno-omit-frame-pointer
+            )
         elseif(SANITIZER STREQUAL "tsan")
-            set(SAN_COMPILE -fsanitize=thread -fno-omit-frame-pointer)
-            set(SAN_LINK -fsanitize=thread)
+            set(VX_SANITIZER_FLAGS
+                -fsanitize=thread
+                -fno-omit-frame-pointer
+            )
         else()
-            message(FATAL_ERROR "Unknown SANITIZER: ${SANITIZER}")
+            message(FATAL_ERROR "Unknown SANITIZER: '${SANITIZER}'.")
         endif()
+
+        add_compile_options(${VX_SANITIZER_FLAGS})
+        add_link_options(${VX_SANITIZER_FLAGS})
+
     else()
-        message(FATAL_ERROR "Sanitizers not supported for this compiler")
+        message(FATAL_ERROR
+            "Sanitizers are not configured for compiler "
+            "'${CMAKE_CXX_COMPILER_ID}' "
+            "with frontend '${CMAKE_CXX_COMPILER_FRONTEND_VARIANT}'.")
     endif()
 
-    add_compile_options(${SAN_COMPILE})
-    add_link_options(${SAN_LINK})
     message(STATUS "Sanitizer: ${SANITIZER}")
 endif()
 
@@ -88,15 +127,13 @@ enable_testing()
 
 # output dirs
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY
-    "${CMAKE_SOURCE_DIR}/bin/$<CONFIG>")
+    "${CMAKE_SOURCE_DIR}/bin/${CMAKE_CXX_COMPILER_ID}-$<CONFIG>-${SANITIZER}")
 
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY
-    "${CMAKE_SOURCE_DIR}/bin/$<CONFIG>")
+    "${CMAKE_SOURCE_DIR}/bin/${CMAKE_CXX_COMPILER_ID}-$<CONFIG>-${SANITIZER}")
 
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY
-    "${CMAKE_SOURCE_DIR}/bin/$<CONFIG>")
-
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+    "${CMAKE_SOURCE_DIR}/bin/${CMAKE_CXX_COMPILER_ID}-$<CONFIG>-${SANITIZER}")
 
 # targets
 add_subdirectory(engine)

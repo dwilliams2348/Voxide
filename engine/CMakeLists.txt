@@ -13,19 +13,19 @@ set(PRIVATE_INCLUDE
 # set platform dependant source files, headers and macros
 if(WIN32)
     file(GLOB_RECURSE PLATFORM_SRC CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/Linux/*.cpp")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/Windows/*.cpp")
 
     list(APPEND PRIVATE_INCLUDE 
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/Linux")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/Windows")
 
-    set(PLATFORM_DEFINITION VX_PLATFORM_WIN32=1)
+    set(PLATFORM_DEFINITION VX_PLATFORM_WIN32=1 _CRT_SECURE_NO_WARNINGS=1)
 elseif(APPLE)
     message(FATAL_ERROR "MacOS is not supported at this time.")
     file(GLOB_RECURSE PLATFORM_SRC CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/Linux/*.cpp")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/MacOS/*.cpp")
 
     list(APPEND PRIVATE_INCLUDE 
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/Linux")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/MacOS")
 
     set(PLATFORM_DEFINITION VX_PLATFORM_MACOS=1)
 elseif(UNIX)

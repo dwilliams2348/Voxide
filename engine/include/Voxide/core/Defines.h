@@ -1,4 +1,4 @@
-#include "Voxide/core/Types.h"
+#include <Voxide/core/Types.h>
 
 #if defined(__clang__) || defined(__GNUC__)
 #define VX_LIKELY(x) __builtin_expect(!!(x), 1)
@@ -24,4 +24,4 @@
 
 #define VX_ALIGNAS(x) alignas(x)
 
-inline constexpr usize kCacheLine = 64;
+inline constexpr engine::usize kCacheLine = 64;
