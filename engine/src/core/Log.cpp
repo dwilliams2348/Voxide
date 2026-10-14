@@ -3,12 +3,14 @@
 #include <stdio.h>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <ctime>
 #include <mutex>
 
 #if defined(VX_PLATFORM_WIN32)
 #include <io.h>
 #include <windows.h>
+#undef min
 
 #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
@@ -57,7 +59,7 @@ namespace engine::log {
         constexpr const char* kLevelNames[] = {"TRACE", "DEBUG", "INFO ", "WARN ", "ERROR", "FATAL"};
 
         void RecomputeMinLevel(){
-            detail::gMinLevel.store(min(gConsoleLevel.load(), gFileLevel.load()));
+            detail::gMinLevel.store(std::min(gConsoleLevel.load(), gFileLevel.load()));
         }
 
         bool StderrIsTerminal() {
