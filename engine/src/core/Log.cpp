@@ -57,7 +57,7 @@ namespace engine::log {
         constexpr const char* kLevelNames[] = {"TRACE", "DEBUG", "INFO ", "WARN ", "ERROR", "FATAL"};
 
         void RecomputeMinLevel(){
-            detail::gMinLevel.store(min(gConsoleLevel, gFileLevel));
+            detail::gMinLevel.store(min(gConsoleLevel.load(), gFileLevel.load()));
         }
 
         bool StderrIsTerminal() {
@@ -206,14 +206,21 @@ namespace engine::log {
         gShowSource.store(enabled);
     }
 
+    void CloseFileLocked() {
+        if(gFile)
+            fclose(gFile);
+
+        gFile = nullptr;
+    }
+
     bool SetFile(const char* path, bool append) {
         gWriteMutex.lock();
 
         if(gFile) {
-            CloseFile();
+            CloseFileLocked();
         }
 
-        gFile = fopen(path, append ? "a" : "w");
+        gFile = fopen(path, append ? "ab" : "wb"); // opens in binary mode so windows bs does not add \r before \n
 
         gWriteMutex.unlock();
         return gFile ? true : false;
@@ -222,10 +229,7 @@ namespace engine::log {
     void CloseFile() {
         gWriteMutex.lock();
 
-        if(gFile)
-            fclose(gFile);
-
-        gFile = nullptr;
+        CloseFileLocked();
 
         gWriteMutex.unlock();
     }
@@ -234,15 +238,11 @@ namespace engine::log {
         // guarntees that the copied string will be null terminated
         // TODO: give some sort of warning of thread name being too long
         strncpy(tName, name, detail::kThreadNameLen);
-
-        if(strlen(tName) > detail::kThreadNameLen - 1) {
-            tName[detail::kThreadNameLen - 1] = '\0';
-        }
+        tName[detail::kThreadNameLen - 1] = '\0';
     }
 
     void SetFatalHandler(FatalHandler handler) {
-        if(handler)
-            gFatalHandler = handler;
+        gFatalHandler = handler;
     }
 
     void Flush() {
@@ -258,80 +258,73 @@ namespace engine::log {
 
     // backend
     void Write(Level level, const char* file, int line, std::string_view message) {
-        bool wantConsole = gConsoleEnabled && ((u8)level >= gConsoleLevel);
-        bool wantFile = ((u8)level >= gFileLevel); // recheck after locking with mutex
-
-        if(!wantConsole && !wantFile)
+        if(level == Level::Off) {
             return;
+        }
+
+        const u8 lvl = (u8)level;
+        bool wantConsole = gConsoleEnabled && (lvl >= gConsoleLevel);
+        bool wantFile = (lvl >= gFileLevel); // recheck after locking with mutex
+
+        if(!wantConsole && !wantFile) {
+            return;
+        }
 
         // build plain body in stack buffer outside of lock
         // "<timestamp> [LEVEL] [thread] message" + optional "(file:line)" + \n;
-        i8 size = 0;
-        char buf[detail::kLineBufferSize] = {0};
-        bool colorEnabled = ColorEnabled() && (level != Level::Off);
-        u8 bufIdx = colorEnabled ? strlen(kColors[(u8)level].start) : 0; // index into buffer stack
+        constexpr usize kCap = detail::kLineBufferSize + 256; // extra space for prefix and suffix of log
+        char buf[kCap] = {0};
+        usize bufIdx = 0; // index into buffer stack
 
-        buf[bufIdx++] = '[';
-        size = (i8)FormatTimestamp(buf + bufIdx, 32);
-        if(size == 0) {
-            // error within formatting time stamp
-            return;
-        }
-
-        bufIdx += (u8)size;
-        buf[bufIdx++] = ']';
-
-        // append level and thread name
-        size = snprintf(buf + bufIdx, detail::kLineBufferSize - bufIdx, " [%s][%s] %s", kLevelNames[(u8)level], tName, message.data());
-        if(size < 0) {
-            perror("snprintf");
-            return;
-        }
-
-        bufIdx += (u8)size;
-
-        if(gShowSource) {
-            if((size = snprintf(buf + bufIdx, detail::kLineBufferSize - bufIdx, "(%s:%d)", BasenameOf(file), line)) < 0) {
-                perror("snprintf");
+        // snprintf returns the length it would have written; clamp to what fit.
+        auto advance = [&](i32 written) {
+            if(written <= 0) {
                 return;
             }
 
-            bufIdx += (u8)size;
+            bufIdx = ((usize)written < kCap - bufIdx) ? bufIdx + (usize)written : kCap - 1;
+        };
+
+        buf[bufIdx++] = '[';
+        usize ts = FormatTimestamp(buf + bufIdx, 32);
+        if(ts == 0) {
+            buf[bufIdx++] = '?';
+        } else {
+            bufIdx += ts;
+        }
+        buf[bufIdx++] = ']';
+
+        // append level and thread name
+        advance(snprintf(buf + bufIdx, kCap - bufIdx, " [%s][%s] %.*s", kLevelNames[lvl], tName, (i32)message.size(), message.data()));
+
+        if(gShowSource.load()) {
+            advance(snprintf(buf + bufIdx, kCap - bufIdx, " (%s:%d)", BasenameOf(file), line));
         }
 
-        if(colorEnabled) {
-            
-        }
+        const bool useColor = wantConsole && ColorEnabled();
 
         gWriteMutex.lock();
         if(wantFile && gFile) {
             fwrite(buf, sizeof(char), bufIdx, gFile);
+            fputc('\n', gFile);
             
             if(level >= Level::Warn) {
                 fflush(gFile);
             }
         }
 
-        if(colorEnabled) {
-            size = strlen(kColors[(u8)level].start);
-            for(u8 i = 0; i < size; i++) {
-                if(buf[i] == '\0') {
-                    buf[i] = kColors[(u8)level].start[i];
-                }
-            }
-
-            size = strlen(kReset);
-            for(u8 i = 0; i < size;) {
-                if(buf[bufIdx] == '\0') {
-                    buf[bufIdx++] = kReset[i++];
-                }
-            }
-        }
-
-        buf[bufIdx++] = '\n';
-
         if(wantConsole) {
+            if(useColor) {
+                fputs(kColors[lvl].start, stderr);
+            }
+
             fwrite(buf, sizeof(char), bufIdx, stderr);
+
+            if(useColor) {
+                fputs(kReset, stderr);
+            }
+
+            fputc('\n', stderr);
         }
 
         gWriteMutex.unlock();
@@ -346,6 +339,7 @@ namespace engine::log {
 
             if(gFatalHandler) {
                 gFatalHandler();
+                tInFatal = false;
             } else {
                 abort();
             }

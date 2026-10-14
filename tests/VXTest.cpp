@@ -26,7 +26,7 @@ namespace test {
     }
 
     void ReportFailure(const char *expr, const char *file, int line) {
-        std::printf("\tFAILED: %s\n\t  at %s:%d", expr, file, line);
+        std::printf("\t  FAILED: %s\n\t  at %s:%d\n", expr, file, line);
         ++gFailuresThisTest;
     }
 

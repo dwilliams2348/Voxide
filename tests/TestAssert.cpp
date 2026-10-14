@@ -14,7 +14,7 @@ namespace {
     }
 } // namespace
 
-VXT_TEST("FW_ASSERT calls the handler on failure") {
+VXT_TEST("assert.calls_handler_on_fail") {
     auto old = engine::SetAssertHandler(TestHandler);
     gCalls = 0;
 
@@ -26,7 +26,7 @@ VXT_TEST("FW_ASSERT calls the handler on failure") {
     VXT_CHECK(std::strcmp(gLastExpr, "1 == 2") == 0);
 }
 
-VXT_TEST("FW_ASSERT does nothing then the condition holds") {
+VXT_TEST("assert.does_nothing_when_condition_holds") {
     auto old = engine::SetAssertHandler(TestHandler);
     gCalls = 0;
 
