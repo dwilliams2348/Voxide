@@ -1,12 +1,5 @@
 cmake_minimum_required(VERSION 3.25...4.4)
 
-# Required for CMAKE_MSVC_RUNTIME_LIBRARY to control /MT vs /MD.
-cmake_policy(SET CMP0091 NEW)
-
-# Default; the sanitizer section may override this for clang-cl ASan.
-set(CMAKE_MSVC_RUNTIME_LIBRARY
-    "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-
 project(Voxide LANGUAGES CXX)
 
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
@@ -27,7 +20,16 @@ else()
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS ${VX_CONFIGS})
 endif()
 
-# sanitizers
+file(GLOB VX_ASAN_RUNTIME_CANDIDATES
+    "${VX_CLANG_RESOURCE_DIR}/lib/windows/*asan*x86_64*.lib"
+)
+
+message(STATUS "Clang ASan runtime candidates:")
+foreach(_lib IN LISTS VX_ASAN_RUNTIME_CANDIDATES)
+    message(STATUS "  ${_lib}")
+endforeach()
+
+# Sanitizers
 set(SANITIZER "none" CACHE STRING "none | asan | tsan")
 set_property(CACHE SANITIZER PROPERTY STRINGS none asan tsan)
 
@@ -37,63 +39,156 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
     set(VX_IS_CLANG_CL ON)
 endif()
 
-if(NOT SANITIZER STREQUAL "none")
-    if(MSVC)
-        if(NOT SANITIZER STREQUAL "asan")
-            message(FATAL_ERROR
-                "MSVC supports SANITIZER=asan only; got '${SANITIZER}'.")
-        endif()
+# Sanitizers
+# Detect clang-cl explicitly. clang-cl identifies as Clang, but uses the
+# MSVC command-line and linker conventions.
+set(VX_IS_CLANG_CL FALSE)
 
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
-        add_compile_options(/fsanitize=address)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+   AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    set(VX_IS_CLANG_CL TRUE)
+endif()
 
-    elseif(VX_IS_CLANG_CL)
-        if(NOT SANITIZER STREQUAL "asan")
-            message(FATAL_ERROR
-                "clang-cl supports SANITIZER=asan only; got '${SANITIZER}'.")
-        endif()
+if(SANITIZER STREQUAL "asan")
 
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
-        add_compile_definitions(_ITERATOR_DEBUG_LEVEL=0)
-        add_compile_options(/fsanitize=address)
-
-        set(VX_LLVM_ASAN_DIR
-        "C:/Program Files/LLVM/lib/clang/18/lib/windows")
-
-        set(VX_ASAN_LIBS
-            "${VX_LLVM_ASAN_DIR}/clang_rt.asan-x86_64.lib"
-            "${VX_LLVM_ASAN_DIR}/clang_rt.asan_cxx-x86_64.lib"
-    )
+    if(VX_IS_CLANG_CL)
 
         message(STATUS "Sanitizer: clang-cl AddressSanitizer")
-    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        if(SANITIZER STREQUAL "asan")
-            set(VX_SANITIZER_FLAGS
-                -fsanitize=address,undefined
-                -fno-sanitize-recover=undefined
-                -fno-sanitize=vptr
-                -fno-omit-frame-pointer
+
+        # Use the dynamic MSVC runtime (/MD, /MDd).
+        # CMP0091 must be NEW, and this must be set before targets are created.
+        set(CMAKE_MSVC_RUNTIME_LIBRARY
+            "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
+        )
+
+        # Compile every target with AddressSanitizer.
+        add_compile_options(/fsanitize=address)
+
+        # Required for compatibility with the Windows ASan runtime.
+        add_compile_definitions(_ITERATOR_DEBUG_LEVEL=0)
+
+        # Discover the runtime libraries from the active compiler installation.
+        execute_process(
+            COMMAND "${CMAKE_CXX_COMPILER}" --print-resource-dir
+            OUTPUT_VARIABLE VX_CLANG_RESOURCE_DIR
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE VX_RESOURCE_DIR_RESULT
+        )
+
+        if(NOT VX_RESOURCE_DIR_RESULT EQUAL 0
+           OR NOT EXISTS "${VX_CLANG_RESOURCE_DIR}/lib/windows")
+            message(FATAL_ERROR
+                "Could not locate the clang-cl runtime directory. "
+                "Compiler: ${CMAKE_CXX_COMPILER}"
             )
-        elseif(SANITIZER STREQUAL "tsan")
-            set(VX_SANITIZER_FLAGS
-                -fsanitize=thread
-                -fno-omit-frame-pointer
-            )
-        else()
-            message(FATAL_ERROR "Unknown SANITIZER: '${SANITIZER}'.")
         endif()
 
-        add_compile_options(${VX_SANITIZER_FLAGS})
-        add_link_options(${VX_SANITIZER_FLAGS})
+        find_library(VX_ASAN_DYNAMIC_LIB
+            NAMES clang_rt.asan_dynamic-x86_64
+            PATHS "${VX_CLANG_RESOURCE_DIR}/lib/windows"
+            NO_DEFAULT_PATH
+        )
+
+        find_library(VX_ASAN_THUNK_LIB
+            NAMES clang_rt.asan_dynamic_runtime_thunk-x86_64
+            PATHS "${VX_CLANG_RESOURCE_DIR}/lib/windows"
+            NO_DEFAULT_PATH
+        )
+
+        if(NOT VX_ASAN_DYNAMIC_LIB OR NOT VX_ASAN_THUNK_LIB)
+            message(FATAL_ERROR
+                "Could not find the required Windows ASan runtime libraries.\n"
+                "Runtime directory: ${VX_CLANG_RESOURCE_DIR}/lib/windows\n"
+                "Dynamic runtime: ${VX_ASAN_DYNAMIC_LIB}\n"
+                "Dynamic thunk: ${VX_ASAN_THUNK_LIB}"
+            )
+        endif()
+
+        message(STATUS "ASan dynamic runtime: ${VX_ASAN_DYNAMIC_LIB}")
+        message(STATUS "ASan dynamic thunk:   ${VX_ASAN_THUNK_LIB}")
+
+        # Represent the thunk archive as an imported static library.
+        add_library(VX_ASAN_THUNK STATIC IMPORTED GLOBAL)
+
+        set_target_properties(VX_ASAN_THUNK PROPERTIES
+            IMPORTED_LOCATION "${VX_ASAN_THUNK_LIB}"
+        )
+
+        # Apply to targets in this directory and its subdirectories.
+        # CMake generates the correct whole-archive syntax for the linker.
+        link_libraries(
+            "${VX_ASAN_DYNAMIC_LIB}"
+            "$<LINK_LIBRARY:WHOLE_ARCHIVE,VX_ASAN_THUNK>"
+        )
+
+    elseif(MSVC)
+
+        message(STATUS "Sanitizer: MSVC AddressSanitizer")
+
+        add_compile_options(/fsanitize=address)
+
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+
+        message(STATUS "Sanitizer: AddressSanitizer + UndefinedBehaviorSanitizer")
+
+        add_compile_options(
+            -fsanitize=address,undefined
+            -fno-sanitize-recover=undefined
+            -fno-sanitize=vptr
+            -fno-omit-frame-pointer
+        )
+
+        add_link_options(
+            -fsanitize=address,undefined
+        )
 
     else()
+
         message(FATAL_ERROR
-            "Sanitizers are not configured for compiler "
-            "'${CMAKE_CXX_COMPILER_ID}' "
-            "with frontend '${CMAKE_CXX_COMPILER_FRONTEND_VARIANT}'.")
+            "AddressSanitizer is not configured for "
+            "${CMAKE_CXX_COMPILER_ID}"
+        )
+
     endif()
 
-    message(STATUS "Sanitizer: ${SANITIZER}")
+elseif(SANITIZER STREQUAL "tsan")
+
+    if(VX_IS_CLANG_CL OR MSVC)
+
+        message(FATAL_ERROR
+            "ThreadSanitizer is not supported by this Windows configuration."
+        )
+
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+
+        message(STATUS "Sanitizer: ThreadSanitizer")
+
+        add_compile_options(
+            -fsanitize=thread
+            -fno-omit-frame-pointer
+        )
+
+        add_link_options(
+            -fsanitize=thread
+        )
+
+    else()
+
+        message(FATAL_ERROR
+            "ThreadSanitizer is not configured for "
+            "${CMAKE_CXX_COMPILER_ID}"
+        )
+
+    endif()
+
+elseif(NOT SANITIZER STREQUAL "none")
+
+    message(FATAL_ERROR "Unknown sanitizer: ${SANITIZER}")
+
+else()
+
+    message(STATUS "Sanitizer: none")
+
 endif()
 
 # Reuse CMake's standard configuration flags.
@@ -122,6 +217,14 @@ foreach(_kind EXE SHARED MODULE)
         CACHE STRING "Linker flags for MinSize configuration"
     )
 endforeach()
+
+add_compile_options(
+    "$<$<CONFIG:RelDeb>:/Zi>"
+)
+
+add_link_options(
+    "$<$<CONFIG:RelDeb>:/DEBUG>"
+)
 
 enable_testing()
 
